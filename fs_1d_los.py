@@ -28,61 +28,14 @@ def compute_intersections(p0, d):
     t2 = (-b + np.sqrt(delta)) / (2.0 * a)
     return t1, t2
 
-def sphere_trace_ctx(ctx, mu, num_sample_points=100):
-    
-    # put the origin somewhere far from the atmosphere:
-    
-    p0 = np.array([0.0, 0.0, 2.0])
-    
-    # mu is always going to be -1 but be flexible
-    d = np.array([-np.sqrt(1.0 - mu**2), 0.0, -mu])
-    intersections = compute_intersections(p0, d)
-    if intersections is None:
-        raise ValueError("Pass a sane mu pls")
-    t1, t2 = intersections
-    sample_ts = np.linspace(t1, t2, num_sample_points)
-    sample_points = p0 + d[None, :] * sample_ts[:, None]
-    centre = np.array([0.0, 0.0, 0.0])
-    radius = 1.0
-    depth = radius - np.sqrt(np.sum((sample_points - centre)**2, axis=1))
-    # NOTE(cmo): Dimensionalise and invert sign of depth
-    depth *= -const.R_sun.value
-    # NOTE(cmo): Shift to align 0 with top of FALC
-    depth += ctx.atmos.z[0]
-    # NOTE(cmo): Limit depth to maximum of FALC
-    mask = depth < ctx.atmos.z[-1]
-    if np.any(mask):
-        max_depth_index = np.argmax(mask)
-        depth[max_depth_index:] = ctx.atmos.z[-1]
+def sphere_trace_semi_inf(ctx, limbdistance, ds = 50):
 
-    ds = (sample_ts[1] - sample_ts[0]) * const.R_sun.value
-    print(f"Step: {ds/1e3} km, max depth = {depth.min() / 1e3} km")
-
-    eta = np.zeros((ctx.spect.wavelength.shape[0], num_sample_points))
-    chi = np.zeros((ctx.spect.wavelength.shape[0], num_sample_points))
-
-    for la in range(ctx.spect.wavelength.shape[0]):
-        # eta[la, :] = weno4(depth, ctx.atmos.z, ctx.depthData.eta[la, 0, 0, :])
-        # chi[la, :] = weno4(depth, ctx.atmos.z, ctx.depthData.chi[la, 0, 0, :])
-        eta[la, :] = np.interp(depth, ctx.atmos.z[::-1], ctx.depthData.eta[la, 0, 0, ::-1])
-        chi[la, :] = np.interp(depth, ctx.atmos.z[::-1], ctx.depthData.chi[la, 0, 0, ::-1])
-    dtau = chi * ds
-    # dtau = 0.5 * (chi[1:] + chi[:-1]) * ds
-    tau = np.cumsum(dtau, axis=1) - tau[0]
-    Sfn = eta / chi
-    transmission = np.exp(-tau)
-    local_contribution = (1.0 - np.exp(-dtau)) * Sfn
-    outgoing_contribution = local_contribution * transmission
-    I = np.sum(outgoing_contribution, axis=1)
-    return I, outgoing_contribution, ds
-
-def sphere_trace_semi_inf(mu_out, ds = 50):
-
-    # NOTE(im): This traces the sphere in a given mu, where p0 actually changes
-    # written by following the one above  
-    # Figure out mu_out, and thus the coordinate of the observing point:
-    
-    dy = 1.0 * np.sqrt(1.0 - mu_out**2.0)
+    # NOTE(im): This traces the sphere in a given mu, where p0 actually changes between the rays 
+    # written by following the one from CMO (a lot of things are simply identical)
+    # limbdistance is in km, compared to the absolute possible top of the atmosphere
+    # So, it's NOT The actual limb distance
+    dy =  1.0 - limbdistance * 1E3 / const.R_sun.value
+    #dy = 1.0 * np.sqrt(1.0 - mu_out**2.0)
     # put the origin somewhere far from the atmosphere:
     
     p0 = np.array([0.0, dy, 1.0])
@@ -96,7 +49,7 @@ def sphere_trace_semi_inf(mu_out, ds = 50):
         return 0
     
     t1, t2 = intersections
-    print (t1,t2)
+    #print (t1,t2)
 
     R_core = const.R_sun.value
     num_sample_points = int((t2-t1) * R_core / 1E3 // ds)
@@ -111,44 +64,54 @@ def sphere_trace_semi_inf(mu_out, ds = 50):
     radius = 1.0
     depth = radius - np.sqrt(np.sum((sample_points - centre)**2, axis=1))
 
-
-
     # NOTE(cmo): Dimensionalise and invert sign of depth
-    depth *= -const.R_sun.value
-
-    print(depth)
-    return depth
-    '''
+    depth *= -const.R_sun.value # in m
+    
     # NOTE(cmo): Shift to align 0 with top of FALC
     depth += ctx.atmos.z[0]
     # NOTE(cmo): Limit depth to maximum DEPTH of FALC
+
+    # make mask where it's deeper than the deepest FALC (no point in solving)
     mask = depth < ctx.atmos.z[-1]
+    
+    # Find the greatest depth index
     if np.any(mask):
         max_depth_index = np.argmax(mask)
         depth[max_depth_index:] = ctx.atmos.z[-1]
+        print ("info it's a core ray")
+    else: 
+        max_depth_index = -1
+        print ("info:: it's a surface ray")
 
+    
+    # 
     ds = (sample_ts[1] - sample_ts[0]) * const.R_sun.value
-    print(f"Step: {ds/1e3} km, max depth = {depth.min() / 1e3} km")
+    print(f"info::step {ds/1e3} km, max depth = {depth.min() / 1e3} km")
 
+    # Allocate opacity and emissivity
     eta = np.zeros((ctx.spect.wavelength.shape[0], num_sample_points))
     chi = np.zeros((ctx.spect.wavelength.shape[0], num_sample_points))
 
-    for la in range(ctx.spect.wavelength.shape[0]):
+    # Interpolate using simple linear interpolation:
+    for l in range(ctx.spect.wavelength.shape[0]):
         # eta[la, :] = weno4(depth, ctx.atmos.z, ctx.depthData.eta[la, 0, 0, :])
         # chi[la, :] = weno4(depth, ctx.atmos.z, ctx.depthData.chi[la, 0, 0, :])
-        eta[la, :] = np.interp(depth, ctx.atmos.z[::-1], ctx.depthData.eta[la, 0, 0, ::-1])
-        chi[la, :] = np.interp(depth, ctx.atmos.z[::-1], ctx.depthData.chi[la, 0, 0, ::-1])
+        # np.interp (x, xp, yp); we are also fillping the z and opacity, emissivity
+        eta[l, :] = np.interp(depth, ctx.atmos.z[::-1], ctx.depthData.eta[l, 0, 0, ::-1])
+        chi[l, :] = np.interp(depth, ctx.atmos.z[::-1], ctx.depthData.chi[l, 0, 0, ::-1])
+    
+    # Simple RT solution:
     dtau = chi * ds
     # dtau = 0.5 * (chi[1:] + chi[:-1]) * ds
+    tau = np.zeros(len(depth))
+    tau[0] = 0.0
     tau = np.cumsum(dtau, axis=1) - tau[0]
     Sfn = eta / chi
     transmission = np.exp(-tau)
     local_contribution = (1.0 - np.exp(-dtau)) * Sfn
     outgoing_contribution = local_contribution * transmission
     I = np.sum(outgoing_contribution, axis=1)
-    return I, outgoing_contribution, ds'''
-
-
+    return I, outgoing_contribution, ds
 
 
 mu_grid = np.linspace(0.01, 0.02, 2)
@@ -163,8 +126,14 @@ if __name__ == "__main__":
     plane_parallel_tabulate = pw.tabulate_bc(falc_ctx, mu_grid=mu_grid)
     lw_I = plane_parallel_tabulate["I"]
 
-    mu_out = 0.01
-    kek = sphere_trace_semi_inf(mu_out, 50)
+    limbdistances = np.linspace(0, 10000,251) + 100.0
+    NL = len(falc_ctx.spect.wavelength)
+    I = np.zeros([251,NL])
+    for m in range(0,251):
+        spec, temp, temp = sphere_trace_semi_inf(falc_ctx, limbdistances[m], 50)
+        I[m,:] = spec 
+
+
 
    
     '''
