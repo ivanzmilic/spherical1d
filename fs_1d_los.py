@@ -53,7 +53,7 @@ def sphere_trace_semi_inf(ctx, limbdistance, ds = 50):
 
     R_core = const.R_sun.value
     num_sample_points = int((t2-t1) * R_core / 1E3 // ds)
-    print ("info::number of sample points is: ", num_sample_points)
+    #print ("info::number of sample points is: ", num_sample_points)
     
     sample_ts = np.linspace(t1, t2, num_sample_points)   
     sample_points = p0 + d[None, :] * sample_ts[:, None]
@@ -78,15 +78,15 @@ def sphere_trace_semi_inf(ctx, limbdistance, ds = 50):
     if np.any(mask):
         max_depth_index = np.argmax(mask)
         depth[max_depth_index:] = ctx.atmos.z[-1]
-        print ("info it's a core ray")
+    #    print ("info it's a core ray")
     else: 
         max_depth_index = -1
-        print ("info:: it's a surface ray")
+    #    print ("info:: it's a surface ray")
 
     
     # 
     ds = (sample_ts[1] - sample_ts[0]) * const.R_sun.value
-    print(f"info::step {ds/1e3} km, max depth = {depth.min() / 1e3} km")
+    #print(f"info::step {ds/1e3} km, max depth = {depth.min() / 1e3} km")
 
     # Allocate opacity and emissivity
     eta = np.zeros((ctx.spect.wavelength.shape[0], num_sample_points))
@@ -119,18 +119,25 @@ mu_grid = np.linspace(0.01, 0.02, 2)
 if __name__ == "__main__":
 
     
-    falc_ctx = pw.compute_falc_bc_ctx(active_atoms=["H", "Ca"], Nthreads=6)
+    falc_ctx = pw.compute_falc_bc_ctx(active_atoms=["H", "Ca"], prd=True, Nthreads=6)
     falc_ctx.depthData.fill = True
     falc_ctx.formal_sol_gamma_matrices()
 
-    plane_parallel_tabulate = pw.tabulate_bc(falc_ctx, mu_grid=mu_grid)
-    lw_I = plane_parallel_tabulate["I"]
+    susi_wavegrid = np.linspace(392.81432, 394.77057, 1912)
 
-    limbdistances = np.linspace(0, 10000,251) + 100.0
-    NL = len(falc_ctx.spect.wavelength)
-    I = np.zeros([251,NL])
-    for m in range(0,251):
-        spec, temp, temp = sphere_trace_semi_inf(falc_ctx, limbdistances[m], 50)
+    I, susi_ctx = falc_ctx.compute_rays(wavelengths=susi_wavegrid, mus=1.0, returnCtx=True)
+    susi_ctx.depthData.fill = True
+    susi_ctx.formal_sol_gamma_matrices()
+
+    #plane_parallel_tabulate = pw.tabulate_bc(falc_ctx, wavelength = susi_wavegrid, mu_grid=mu_grid)
+    #lw_I = plane_parallel_tabulate["I"]
+
+    NX = 1500-670+1
+    limbdistances = np.arange(NX) * 19.2125+50.0
+    NL = len(susi_ctx.spect.wavelength)
+    I = np.zeros([NX,NL])
+    for m in tqdm(range(0,NX)):
+        spec, temp, temp = sphere_trace_semi_inf(susi_ctx, limbdistances[m], 50)
         I[m,:] = spec 
 
 
