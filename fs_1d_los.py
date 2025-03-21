@@ -5,6 +5,7 @@ import promweaver as pw
 import astropy.constants as const
 from tqdm import tqdm
 from matplotlib.colors import LogNorm
+from astropy.io import fits
 
 # Based on a quick and dirty, but amazing, routine written by CMO @ Freiburg in May 2024
 # IM: Tuning it a little bit to my taste and then gonna use with opacities and emissivities output by LW
@@ -52,6 +53,8 @@ def sphere_trace_semi_inf(ctx, limbdistance, ds = 50):
     #print (t1,t2)
 
     R_core = const.R_sun.value
+    stotal = (t2-t1) * R_core # m 
+    # Here I am not sure what should be R_total, R_core, Rsun.... Maybe it does not even matter?
     num_sample_points = int((t2-t1) * R_core / 1E3 // ds)
     #print ("info::number of sample points is: ", num_sample_points)
     
@@ -78,6 +81,9 @@ def sphere_trace_semi_inf(ctx, limbdistance, ds = 50):
     if np.any(mask):
         max_depth_index = np.argmax(mask)
         depth[max_depth_index:] = ctx.atmos.z[-1]
+        depth = depth[:max_depth_index]
+        num_sample_points = max_depth_index
+        #stotal = 
     #    print ("info it's a core ray")
     else: 
         max_depth_index = -1
@@ -89,8 +95,9 @@ def sphere_trace_semi_inf(ctx, limbdistance, ds = 50):
     #print(f"info::step {ds/1e3} km, max depth = {depth.min() / 1e3} km")
 
     # Allocate opacity and emissivity
-    eta = np.zeros((ctx.spect.wavelength.shape[0], num_sample_points))
-    chi = np.zeros((ctx.spect.wavelength.shape[0], num_sample_points))
+    NL = ctx.spect.wavelength.shape[0]
+    eta = np.zeros((NL, num_sample_points))
+    chi = np.zeros((NL, num_sample_points))
 
     # Interpolate using simple linear interpolation:
     for l in range(ctx.spect.wavelength.shape[0]):
@@ -101,17 +108,19 @@ def sphere_trace_semi_inf(ctx, limbdistance, ds = 50):
         chi[l, :] = np.interp(depth, ctx.atmos.z[::-1], ctx.depthData.chi[l, 0, 0, ::-1])
     
     # Simple RT solution:
-    dtau = chi * ds
+    dtau = chi[:,:] * ds
     # dtau = 0.5 * (chi[1:] + chi[:-1]) * ds
-    tau = np.zeros(len(depth))
-    tau[0] = 0.0
-    tau = np.cumsum(dtau, axis=1) - tau[0]
+    #tau = np.zeros((NL, len(depth)))
+    #tau[:,0] = 0.0
+    tau = np.cumsum(dtau, axis=1)# - tau[:,0]
+    #print (tau.shape)
+
     Sfn = eta / chi
     transmission = np.exp(-tau)
     local_contribution = (1.0 - np.exp(-dtau)) * Sfn
     outgoing_contribution = local_contribution * transmission
     I = np.sum(outgoing_contribution, axis=1)
-    return I, outgoing_contribution, ds
+    return I, outgoing_contribution, stotal, np.amax(np.abs(tau), axis=1)
 
 
 mu_grid = np.linspace(0.01, 0.02, 2)
@@ -132,17 +141,28 @@ if __name__ == "__main__":
     #plane_parallel_tabulate = pw.tabulate_bc(falc_ctx, wavelength = susi_wavegrid, mu_grid=mu_grid)
     #lw_I = plane_parallel_tabulate["I"]
 
-    NX = 1500-670+1
-    limbdistances = np.arange(NX) * 19.2125+50.0
+    #NX = 1500-670+1
+    #limbdistances = np.arange(NX) * 19.2125+50.0
+
+    NX = 100
+    limbdistances = np.arange(NX) * 500.0+50.0
     NL = len(susi_ctx.spect.wavelength)
     I = np.zeros([NX,NL])
+    paths = np.zeros(NX)
+    taus = np.zeros([NX,NL])
     for m in tqdm(range(0,NX)):
-        spec, temp, temp = sphere_trace_semi_inf(susi_ctx, limbdistances[m], 50)
+        spec, temp, total_path, total_tau = sphere_trace_semi_inf(susi_ctx, limbdistances[m], 25.0)
         I[m,:] = spec 
+        paths[m] = total_path
+        taus[m,:] = total_tau
 
+    kek = fits.PrimaryHDU(I)
+    bur = fits.ImageHDU(paths)
+    lol = fits.ImageHDU(taus)
 
+    listerino = fits.HDUList([kek,bur,lol])
+    listerino.writeto("synth_susi.fits", overwrite=True)
 
-   
     '''
     spherical_I = np.zeros((falc_ctx.spect.wavelength.shape[0], mu_grid.shape[0]))
     cfn = np.zeros((falc_ctx.spect.wavelength.shape[0], mu_grid.shape[0], 20_000))
@@ -170,30 +190,3 @@ if __name__ == "__main__":
     fig.colorbar(mappable, ax=ax[1])
     ax[1].set_title("Depth Rays")
     fig.savefig("FSComparison.png", dpi=300)'''
-
-#--------------------------------------------------------------------------------------------------------------
-
-    #print (t1,t2)
-
-    # now we should figure out if this is a 'core' ray or an 'outer' ray:
-    # Maybe this is not needed:
-
-    # that is decided by the dy:
-    #core_ray = True
-
-    #R_core = const.R_sun.value
-    #print (R_core)
-    #dz_max = 2E6 # in m, hard-coded, FIX!
-    #R_max = const.R_sun.value+dz_max
-    
-    # Here remember that R = 1.0 corresponds to the R_max
-    #if (dy > R_core/R_max):
-    #    core_ray = False
-
-    #print("info:: I am a core ray: ", core_ray)
-
-    #sample_ts = 0
-    #if (core_ray == False):
-    #    sample_ts = np.linspace(t1, t2, num_sample_points)
-    #else:
-    #    t1 = 
