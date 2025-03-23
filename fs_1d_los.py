@@ -35,7 +35,7 @@ def sphere_trace_semi_inf(ctx, limbdistance, ds = 50):
     # written by following the one from CMO (a lot of things are simply identical)
     # limbdistance is in km, compared to the absolute possible top of the atmosphere
     # So, it's NOT The actual limb distance
-    dy =  1.0 - limbdistance * 1E3 / const.R_sun.value
+    dy =  1.0 - limbdistance / const.R_sun.value
     #dy = 1.0 * np.sqrt(1.0 - mu_out**2.0)
     # put the origin somewhere far from the atmosphere:
     
@@ -53,7 +53,6 @@ def sphere_trace_semi_inf(ctx, limbdistance, ds = 50):
     #print (t1,t2)
 
     R_core = const.R_sun.value
-    stotal = (t2-t1) * R_core # m 
     # Here I am not sure what should be R_total, R_core, Rsun.... Maybe it does not even matter?
     num_sample_points = int((t2-t1) * R_core / 1E3 // ds)
     #print ("info::number of sample points is: ", num_sample_points)
@@ -72,9 +71,8 @@ def sphere_trace_semi_inf(ctx, limbdistance, ds = 50):
     
     # NOTE(cmo): Shift to align 0 with top of FALC
     depth += ctx.atmos.z[0]
-    # NOTE(cmo): Limit depth to maximum DEPTH of FALC
-
-    # make mask where it's deeper than the deepest FALC (no point in solving)
+    # NOTE(cmo): Limit depth to maximum DEPTH of FALC. i.e. make mask where it's deeper than the deepest FALC (no point in solving)
+    # NOTE(im) : We want to also the reduce the length of the actual intersection in order to do the comparison with p-p rays
     mask = depth < ctx.atmos.z[-1]
     
     # Find the greatest depth index
@@ -83,26 +81,26 @@ def sphere_trace_semi_inf(ctx, limbdistance, ds = 50):
         depth[max_depth_index:] = ctx.atmos.z[-1]
         depth = depth[:max_depth_index]
         num_sample_points = max_depth_index
-        #stotal = 
-    #    print ("info it's a core ray")
+        #print ("info::it's a core ray")
+        #print ("info:: max_depth index is, ", num_sample_points)
     else: 
         max_depth_index = -1
-    #    print ("info:: it's a surface ray")
+        #print ("info:: it's a surface ray")
 
     
-    # 
+    # ds changed a little bit because we cannot have exact sampling we asked for
     ds = (sample_ts[1] - sample_ts[0]) * const.R_sun.value
+    # now this should be the actual, geometrical path along the way:
+    stotal = num_sample_points * ds # the actual 
     #print(f"info::step {ds/1e3} km, max depth = {depth.min() / 1e3} km")
 
     # Allocate opacity and emissivity
-    NL = ctx.spect.wavelength.shape[0]
-    eta = np.zeros((NL, num_sample_points))
-    chi = np.zeros((NL, num_sample_points))
+    num_lambda = ctx.spect.wavelength.shape[0]
+    eta = np.zeros((num_lambda, num_sample_points))
+    chi = np.zeros((num_lambda, num_sample_points))
 
     # Interpolate using simple linear interpolation:
     for l in range(ctx.spect.wavelength.shape[0]):
-        # eta[la, :] = weno4(depth, ctx.atmos.z, ctx.depthData.eta[la, 0, 0, :])
-        # chi[la, :] = weno4(depth, ctx.atmos.z, ctx.depthData.chi[la, 0, 0, :])
         # np.interp (x, xp, yp); we are also fillping the z and opacity, emissivity
         eta[l, :] = np.interp(depth, ctx.atmos.z[::-1], ctx.depthData.eta[l, 0, 0, ::-1])
         chi[l, :] = np.interp(depth, ctx.atmos.z[::-1], ctx.depthData.chi[l, 0, 0, ::-1])
@@ -110,17 +108,14 @@ def sphere_trace_semi_inf(ctx, limbdistance, ds = 50):
     # Simple RT solution:
     dtau = chi[:,:] * ds
     # dtau = 0.5 * (chi[1:] + chi[:-1]) * ds
-    #tau = np.zeros((NL, len(depth)))
-    #tau[:,0] = 0.0
-    tau = np.cumsum(dtau, axis=1)# - tau[:,0]
-    #print (tau.shape)
+    tau = np.cumsum(dtau, axis=1)
 
     Sfn = eta / chi
     transmission = np.exp(-tau)
     local_contribution = (1.0 - np.exp(-dtau)) * Sfn
     outgoing_contribution = local_contribution * transmission
     I = np.sum(outgoing_contribution, axis=1)
-    return I, outgoing_contribution, stotal, np.amax(np.abs(tau), axis=1)
+    return I, outgoing_contribution, stotal, tau[:,-1]
 
 
 mu_grid = np.linspace(0.01, 0.02, 2)
@@ -138,19 +133,24 @@ if __name__ == "__main__":
     susi_ctx.depthData.fill = True
     susi_ctx.formal_sol_gamma_matrices()
 
-    #plane_parallel_tabulate = pw.tabulate_bc(falc_ctx, wavelength = susi_wavegrid, mu_grid=mu_grid)
-    #lw_I = plane_parallel_tabulate["I"]
+    # Actual SUSI-like spatial grid:
+    num_distances = 1500-670+1
+    #NX=20
+    limbdistances = np.arange(num_distances) * 19.2125+1.0
 
-    #NX = 1500-670+1
-    #limbdistances = np.arange(NX) * 19.2125+50.0
+    #num_distances = 200
+    #limbdistances = np.arange(num_distances) * 1000.0+20.0 # exact zero does not work very well. larger limb distance is closer to the disk center.
+    limbdistances *= 1e3 # convert to m please 
+    Rs = const.R_sun.value
+    mus = np.sqrt(1.0 - ((Rs-limbdistances)/Rs)**2.0)
+    total_z = susi_ctx.atmos.z[0] - susi_ctx.atmos.z[-1] 
 
-    NX = 100
-    limbdistances = np.arange(NX) * 500.0+50.0
-    NL = len(susi_ctx.spect.wavelength)
-    I = np.zeros([NX,NL])
-    paths = np.zeros(NX)
-    taus = np.zeros([NX,NL])
-    for m in tqdm(range(0,NX)):
+    num_lambda = len(susi_ctx.spect.wavelength)
+    I = np.zeros([num_distances, num_lambda])
+    paths = np.zeros(num_distances)
+    taus = np.zeros([num_distances, num_lambda])
+    for m in tqdm(range(0, num_distances)):
+    #for m in range(0,NX):
         spec, temp, total_path, total_tau = sphere_trace_semi_inf(susi_ctx, limbdistances[m], 25.0)
         I[m,:] = spec 
         paths[m] = total_path
@@ -164,6 +164,8 @@ if __name__ == "__main__":
     listerino.writeto("synth_susi.fits", overwrite=True)
 
     '''
+    #plane_parallel_tabulate = pw.tabulate_bc(falc_ctx, wavelength = susi_wavegrid, mu_grid=mu_grid)
+    #lw_I = plane_parallel_tabulate["I"]
     spherical_I = np.zeros((falc_ctx.spect.wavelength.shape[0], mu_grid.shape[0]))
     cfn = np.zeros((falc_ctx.spect.wavelength.shape[0], mu_grid.shape[0], 20_000))
     ds = np.zeros(mu_grid.shape[0])
