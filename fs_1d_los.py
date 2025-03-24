@@ -134,12 +134,12 @@ if __name__ == "__main__":
     susi_ctx.formal_sol_gamma_matrices()
 
     # Actual SUSI-like spatial grid:
-    num_distances = 1500-670+1
-    #NX=20
-    limbdistances = np.arange(num_distances) * 19.2125+1.0
+    #num_distances = 1500-670+1
+    #limbdistances = np.arange(num_distances) * 19.2125+1.0
 
-    #num_distances = 200
-    #limbdistances = np.arange(num_distances) * 1000.0+20.0 # exact zero does not work very well. larger limb distance is closer to the disk center.
+
+    num_distances = 1000
+    limbdistances = np.arange(num_distances) * 50.0+20.0 # exact zero does not work very well. larger limb distance is closer to the disk center.
     limbdistances *= 1e3 # convert to m please 
     Rs = const.R_sun.value
     mus = np.sqrt(1.0 - ((Rs-limbdistances)/Rs)**2.0)
@@ -157,11 +157,13 @@ if __name__ == "__main__":
         taus[m,:] = total_tau
 
     kek = fits.PrimaryHDU(I)
+    kek2 = fits.ImageHDU(limbdistances)
     bur = fits.ImageHDU(paths)
     lol = fits.ImageHDU(taus)
 
-    listerino = fits.HDUList([kek,bur,lol])
-    listerino.writeto("synth_susi.fits", overwrite=True)
+
+    listerino = fits.HDUList([kek,kek2, bur,lol])
+    listerino.writeto("demonstration.fits", overwrite=True)
 
     '''
     #plane_parallel_tabulate = pw.tabulate_bc(falc_ctx, wavelength = susi_wavegrid, mu_grid=mu_grid)
