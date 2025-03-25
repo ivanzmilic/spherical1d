@@ -37,21 +37,24 @@ def sphere_trace_semi_inf(ctx, limbdistance, ds = 50):
     # So, it's NOT The actual limb distance
     dy =  1.0 - limbdistance / const.R_sun.value
     #dy = 1.0 * np.sqrt(1.0 - mu_out**2.0)
-    # put the origin somewhere far from the atmosphere:
     
+
+    # put the origin somewhere far from the atmosphere:
     p0 = np.array([0.0, dy, 1.0])
 
     # mu is always going to be -1 in this formulation:
     d = np.array([0,0, -1.0])
     intersections = compute_intersections(p0, d)
+
+    num_lambda = ctx.spect.wavelength.shape[0]
     
     if intersections is None:
-        raise ValueError("Pass a sane mu_out pls")
-        return 0
+        #raise ValueError("Pass a sane mu_out pls")
+        I = np.zeros(num_lambda)
+        return I,0,0,0
     
     t1, t2 = intersections
-    #print (t1,t2)
-
+    
     R_core = const.R_sun.value
     # Here I am not sure what should be R_total, R_core, Rsun.... Maybe it does not even matter?
     num_sample_points = int((t2-t1) * R_core / 1E3 // ds)
@@ -95,7 +98,6 @@ def sphere_trace_semi_inf(ctx, limbdistance, ds = 50):
     #print(f"info::step {ds/1e3} km, max depth = {depth.min() / 1e3} km")
 
     # Allocate opacity and emissivity
-    num_lambda = ctx.spect.wavelength.shape[0]
     eta = np.zeros((num_lambda, num_sample_points))
     chi = np.zeros((num_lambda, num_sample_points))
 
@@ -127,22 +129,32 @@ if __name__ == "__main__":
     falc_ctx.depthData.fill = True
     falc_ctx.formal_sol_gamma_matrices()
 
-    susi_wavegrid = np.linspace(392.81432, 394.77057, 1912)
+    
+    atlas_wavegrid = np.linspace(391.0, 396.0, 2001)
 
-    I, susi_ctx = falc_ctx.compute_rays(wavelengths=susi_wavegrid, mus=1.0, returnCtx=True)
+    I, susi_ctx = falc_ctx.compute_rays(wavelengths=lw.air_to_vac(atlas_wavegrid), mus=1.0, returnCtx=True)
     susi_ctx.depthData.fill = True
     susi_ctx.formal_sol_gamma_matrices()
 
-    # Actual SUSI-like spatial grid:
-    #num_distances = 1500-670+1
-    #limbdistances = np.arange(num_distances) * 19.2125+1.0
+    kek = fits.PrimaryHDU(I)
+    kek.writeto("atlas_disk_center.fits", overwrite=True)
 
+    susi_wavegrid = np.linspace(392.81432, 394.77057, 1912)
+    I, susi_ctx = falc_ctx.compute_rays(wavelengths=lw.air_to_vac(susi_wavegrid), mus=1.0, returnCtx=True)
+    susi_ctx.depthData.fill = True
+    susi_ctx.formal_sol_gamma_matrices()
 
-    num_distances = 1000
-    limbdistances = np.arange(num_distances) * 50.0+20.0 # exact zero does not work very well. larger limb distance is closer to the disk center.
-    limbdistances *= 1e3 # convert to m please 
+    # Experimentation, to show the point:
+    #num_distances = 1000
+    #limbdistances = np.arange(num_distances) * 50.0+20.0 # exact zero does not work very well. larger limb distance is closer to the disk center.
+    #limbdistances *= 1e3 # convert to m please 
+    # Actualy SUSI:
+    num_distances = 1557
+    limbdistances = (np.arange(num_distances) - 784)*19.25+1.0 # Don't hit exactly 0
+    limbdistances *= 1e3
+    
     Rs = const.R_sun.value
-    mus = np.sqrt(1.0 - ((Rs-limbdistances)/Rs)**2.0)
+    #mus = np.sqrt(1.0 - ((Rs-limbdistances)/Rs)**2.0)
     total_z = susi_ctx.atmos.z[0] - susi_ctx.atmos.z[-1] 
 
     num_lambda = len(susi_ctx.spect.wavelength)
@@ -163,7 +175,8 @@ if __name__ == "__main__":
 
 
     listerino = fits.HDUList([kek,kek2, bur,lol])
-    listerino.writeto("demonstration.fits", overwrite=True)
+    #listerino.writeto("demonstration.fits", overwrite=True)
+    listerino.writeto("susi_synth.fits", overwrite=True)
 
     '''
     #plane_parallel_tabulate = pw.tabulate_bc(falc_ctx, wavelength = susi_wavegrid, mu_grid=mu_grid)

@@ -77,3 +77,6 @@ plt.xlabel("$\mu$")
 plt.ylabel("Optical depth")
 plt.tight_layout()
 plt.savefig("tauslogmu.png",bbox_inches='tight')
+
+
+# ---------------------------------------------------------------------------------------------------------------------------------------
