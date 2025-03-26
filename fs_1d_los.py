@@ -126,6 +126,8 @@ if __name__ == "__main__":
 
     
     falc_ctx = pw.compute_falc_bc_ctx(active_atoms=["H", "Ca"], prd=True, Nthreads=6)
+    #falc_ctx.conserveCharge=True
+    #lw.iterate_ctx_se(falc_ctx, prd=True)
     falc_ctx.depthData.fill = True
     falc_ctx.formal_sol_gamma_matrices()
 
