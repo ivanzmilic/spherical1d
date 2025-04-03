@@ -107,6 +107,9 @@ def sphere_trace_semi_inf(ctx, limbdistance, ds = 50):
         eta[l, :] = np.interp(depth, ctx.atmos.z[::-1], ctx.depthData.eta[l, 0, 0, ::-1])
         chi[l, :] = np.interp(depth, ctx.atmos.z[::-1], ctx.depthData.chi[l, 0, 0, ::-1])
     
+    #print(ctx.atmos.z[0]-depth, chi[539,:])
+    for d in range(len(eta[0])):
+        print((ctx.atmos.z[0]-depth[d])/1E3, chi[539,d])
     # Simple RT solution:
     dtau = chi[:,:] * ds
     # dtau = 0.5 * (chi[1:] + chi[:-1]) * ds
@@ -154,6 +157,8 @@ if __name__ == "__main__":
     num_distances = 1557
     limbdistances = (np.arange(num_distances) - 784)*19.25+1.0 # Don't hit exactly 0
     limbdistances *= 1e3
+    limbdistances = limbdistances[783:788]
+    num_distances = len(limbdistances)
     
     Rs = const.R_sun.value
     #mus = np.sqrt(1.0 - ((Rs-limbdistances)/Rs)**2.0)
