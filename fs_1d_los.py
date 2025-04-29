@@ -6,6 +6,7 @@ import astropy.constants as const
 from tqdm import tqdm
 from matplotlib.colors import LogNorm
 from astropy.io import fits
+import xarray as xr
 
 # Based on a quick and dirty, but amazing, routine written by CMO @ Freiburg in May 2024
 # IM: Tuning it a little bit to my taste and then gonna use with opacities and emissivities output by LW
@@ -72,9 +73,9 @@ def sphere_trace_semi_inf(ctx, limbdistance, ds = 50):
     # NOTE(cmo): Dimensionalise and invert sign of depth
     depth *= -const.R_sun.value # in m
     
-    # NOTE(cmo): Shift to align 0 with top of FALC
+    # NOTE(cmo): Shift to align 0 with top of our atmosphere
     depth += ctx.atmos.z[0]
-    # NOTE(cmo): Limit depth to maximum DEPTH of FALC. i.e. make mask where it's deeper than the deepest FALC (no point in solving)
+    # NOTE(cmo): Limit depth to maximum DEPTH of our atmosphere. i.e. make mask where it's deeper than the deepest FALC (no point in solving)
     # NOTE(im) : We want to also the reduce the length of the actual intersection in order to do the comparison with p-p rays
     mask = depth < ctx.atmos.z[-1]
     
@@ -108,8 +109,8 @@ def sphere_trace_semi_inf(ctx, limbdistance, ds = 50):
         chi[l, :] = np.interp(depth, ctx.atmos.z[::-1], ctx.depthData.chi[l, 0, 0, ::-1])
     
     #print(ctx.atmos.z[0]-depth, chi[539,:])
-    for d in range(len(eta[0])):
-        print((ctx.atmos.z[0]-depth[d])/1E3, chi[539,d])
+    #for d in range(len(eta[0])):
+    #    print((ctx.atmos.z[0]-depth[d])/1E3, chi[539,d])
     # Simple RT solution:
     dtau = chi[:,:] * ds
     # dtau = 0.5 * (chi[1:] + chi[:-1]) * ds
@@ -125,19 +126,42 @@ def sphere_trace_semi_inf(ctx, limbdistance, ds = 50):
 
 mu_grid = np.linspace(0.01, 0.02, 2)
 
-if __name__ == "__main__":
+def formal_solution_slit(input_atmos=None):
 
     
-    falc_ctx = pw.compute_falc_bc_ctx(active_atoms=["H", "Ca"], prd=True, Nthreads=6)
-    #falc_ctx.conserveCharge=True
-    #lw.iterate_ctx_se(falc_ctx, prd=True)
-    falc_ctx.depthData.fill = True
-    falc_ctx.formal_sol_gamma_matrices()
+    if (input_atmos == None):   
+        default_ctx = pw.compute_falc_bc_ctx(active_atoms=["H", "Ca"], prd=True, Nthreads=6)
+        #falc_ctx.conserveCharge=True
+        #lw.iterate_ctx_se(falc_ctx, prd=True)
+        default_ctx.depthData.fill = True
+        default_ctx.formal_sol_gamma_matrices()
+
+    else:
+        
+        """ This is taken from: https://github.com/Goobley/Promweaver/blob/main/promweaver/compute_bc.py
+        What we did is we took compute_falc_bc and we want to replace the model atmospheres:
+        Configures and iterates a lightweaver Context with a FALC atmosphere, the
+        selected atomic models, and active atoms. This can then be used with a
+        DynamicContextPromBcProvider.
+        """
 
     
+        atomic_models = pw.default_atomic_models()
+        atmos = input_atmos
+        atmos.quadrature(5)
+
+        rad_set = lw.RadiativeSet(atomic_models)
+        rad_set.set_active('H', 'Ca')
+        eq_pops = rad_set.compute_eq_pops(atmos)
+        spect = rad_set.compute_wavelength_grid()
+
+        hprd = True
+        default_ctx = lw.Context(atmos, spect, eq_pops, Nthreads=6, hprd=True)
+        lw.iterate_ctx_se(default_ctx, prd=True, quiet=True)
+
     atlas_wavegrid = np.linspace(391.0, 396.0, 2001)
 
-    I, susi_ctx = falc_ctx.compute_rays(wavelengths=lw.air_to_vac(atlas_wavegrid), mus=1.0, returnCtx=True)
+    I, susi_ctx = default_ctx.compute_rays(wavelengths=lw.air_to_vac(atlas_wavegrid), mus=1.0, returnCtx=True)
     susi_ctx.depthData.fill = True
     susi_ctx.formal_sol_gamma_matrices()
 
@@ -145,7 +169,7 @@ if __name__ == "__main__":
     kek.writeto("atlas_disk_center.fits", overwrite=True)
 
     susi_wavegrid = np.linspace(392.81432, 394.77057, 1912)
-    I, susi_ctx = falc_ctx.compute_rays(wavelengths=lw.air_to_vac(susi_wavegrid), mus=1.0, returnCtx=True)
+    I, susi_ctx = default_ctx.compute_rays(wavelengths=lw.air_to_vac(susi_wavegrid), mus=1.0, returnCtx=True)
     susi_ctx.depthData.fill = True
     susi_ctx.formal_sol_gamma_matrices()
 
@@ -157,7 +181,7 @@ if __name__ == "__main__":
     num_distances = 1557
     limbdistances = (np.arange(num_distances) - 784)*19.25+1.0 # Don't hit exactly 0
     limbdistances *= 1e3
-    limbdistances = limbdistances[783:788]
+    #limbdistances = limbdistances[783:788]
     num_distances = len(limbdistances)
     
     Rs = const.R_sun.value
@@ -175,42 +199,32 @@ if __name__ == "__main__":
         paths[m] = total_path
         taus[m,:] = total_tau
 
-    kek = fits.PrimaryHDU(I)
-    kek2 = fits.ImageHDU(limbdistances)
-    bur = fits.ImageHDU(paths)
-    lol = fits.ImageHDU(taus)
+    return I, limbdistances, paths, taus
+
+    #kek = fits.PrimaryHDU(I)
+    #kek2 = fits.ImageHDU(limbdistances)
+    #bur = fits.ImageHDU(paths)
+    #lol = fits.ImageHDU(taus)
 
 
-    listerino = fits.HDUList([kek,kek2, bur,lol])
+    #listerino = fits.HDUList([kek,kek2, bur,lol])
     #listerino.writeto("demonstration.fits", overwrite=True)
-    listerino.writeto("susi_synth.fits", overwrite=True)
+    #listerino.writeto("susi_synth.fits", overwrite=True)
 
-    '''
-    #plane_parallel_tabulate = pw.tabulate_bc(falc_ctx, wavelength = susi_wavegrid, mu_grid=mu_grid)
-    #lw_I = plane_parallel_tabulate["I"]
-    spherical_I = np.zeros((falc_ctx.spect.wavelength.shape[0], mu_grid.shape[0]))
-    cfn = np.zeros((falc_ctx.spect.wavelength.shape[0], mu_grid.shape[0], 20_000))
-    ds = np.zeros(mu_grid.shape[0])
-    for mu_idx, mu in enumerate(tqdm(mu_grid)):
-        spherical_I[:, mu_idx], cfn[:, mu_idx, :], ds[mu_idx] = sphere_trace_ctx(falc_ctx, mu)
+if __name__=='__main__':
 
-    wave = falc_ctx.spect.wavelength
-    wave_edges = np.concatenate((
-        [wave[0]],
-        0.5 * (wave[1:] + wave[:-1]),
-        [wave[-1]]
-    ))
-    mu_edges = np.concatenate((
-        [mu_grid[0]],
-        0.5 * (mu_grid[1:] + mu_grid[:-1]),
-        [mu_grid[-1]]
-    ))
-    plt.ion()
-    fig, ax = plt.subplots(1, 2, constrained_layout=True, figsize=(10, 8), sharex=True, sharey=True)
-    mappable = ax[0].pcolormesh(mu_edges, wave_edges, lw_I, norm=LogNorm())
-    fig.colorbar(mappable, ax=ax[0])
-    ax[0].set_title("Plane-Parallel")
-    mappable = ax[1].pcolormesh(mu_edges, wave_edges, spherical_I, norm=LogNorm())
-    fig.colorbar(mappable, ax=ax[1])
-    ax[1].set_title("Depth Rays")
-    fig.savefig("FSComparison.png", dpi=300)'''
+    #test_slit = formal_solution_slit()
+
+    # Now let's load some radyn atmosphere:
+
+    ds = xr.open_dataset("radyn_out_vars.nc")
+
+    t = 0 
+
+    # Note that RADYN Is CGS, and LW is SI
+
+    atmos1d = lw.Atmosphere.make_1d(scale = lw.ScaleType.Geometric, depthScale = ds.z[t].values * 1E-2, temperature = ds.temperature[t].values, \
+        vlos = ds.vz[t].values * 1E-2, vturb = np.ones(300)*2E3, ne = ds.ne[t].values*1E6, \
+        nHTot = ds.dens[t].values / (lw.DefaultAtomicAbundance.avgMass * lw.Amu*1E3) * 1E6)
+
+    test_slit = formal_solution_slit(atmos1d)
