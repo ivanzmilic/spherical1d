@@ -248,8 +248,15 @@ if __name__=='__main__':
 
     vels = np.zeros((ds.vz[t].values.shape[0], 3))
     vels[:, 2] = ds.vz[t].values * 1e-2 * 5 # Yes I'm making this bigger
-    vels[:, 0] = 5e3 * np.sin(ds.z[t].values / ds.z[t].values.max() * 6 * np.pi)
+    vels[:, 0] = 5e3 * np.sin(ds.z[t].values / ds.z[t].values.max() * 12 * np.pi)
 
     test_slit = formal_solution_slit(atmos1d, velocity_field=None)
     test_slit_novel = formal_solution_slit(atmos1d, velocity_field=np.zeros((ds.vz[t].values.shape[0], 3)))
     test_slit_xvel = formal_solution_slit(atmos1d, velocity_field=vels)
+
+    # This same approach can be used to a "tiled" sphere approach to doing this same thing with 3D cubes:
+    # - x and y are periodic and tile the surface of the sphere (UV mapping)
+    # - we define a spherical surface for each plane of z cells
+    # - between the "in" and "out" points of this z-plane, we trace a ray through the x-y plane
+    # - this 2D traversal (with a 1/muz expansion/tilt term) can almost certainly be treated as straight, so use DDA a la Dex to do it efficiently.
+    # - remember that the path for all wavelengths is the same, so precompute this for each ray before integrating the RTE
