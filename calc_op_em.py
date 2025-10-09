@@ -78,7 +78,7 @@ def calc_op_em(popfile, murampath, muramid, wavelengths, axis=0, otherids=(0,0))
 
     else: return 0 # zeros
 
-    print (pops.shape)
+    #print (pops.shape)
 
     pops /= 1E6 # to convert to cm^-3
 
@@ -121,10 +121,12 @@ def calc_op_em(popfile, murampath, muramid, wavelengths, axis=0, otherids=(0,0))
     a = gamma / dnu_D
     # Shifted line center in wavelength units:
     delta_lambda = (v_los / const.c.cgs.value) * llambda0
+    # Debug
+    #delta_lambda *= 0.0
 
     vv = (wavelengths[:,None]*1E-7 - llambda0 - delta_lambda[None,:]) / dl_D[None,:]
 
-    print(vv[:,0])
+    #print(vv[:,0])
 
     # Calculate profiles without the loop:
     phi = fvoigt(a[None,:], vv)
@@ -135,6 +137,22 @@ def calc_op_em(popfile, murampath, muramid, wavelengths, axis=0, otherids=(0,0))
   
     return op, em
 
+def simple_formal_solution(op, em, ds):
+
+    dtau = op[:,:] * ds
+    tau = np.cumsum(dtau, axis=1)
+    Sfn = em / op
+    transmission = np.exp(-tau)
+    smalltau = np.where(tau<1E-2)
+    transmission[smalltau] = 1.0 - tau[smalltau] + 0.5 * tau[smalltau]**2 - (1.0/6.0) * tau[smalltau]**3
+    local_contribution = (1.0 - transmission) * Sfn
+    local_contribution[smalltau] = dtau[smalltau] * Sfn[smalltau] * (1.0 - 0.5 * dtau[smalltau] + (1.0/6.0) * dtau[smalltau]**2 - (1.0/24.0) * dtau[smalltau]**3)
+    # Now integrate over z (axis=1):
+    outgoing_contribution = local_contribution * transmission
+    I = np.sum(outgoing_contribution, axis=1)
+    dtm = np.amax(tau)
+    return I, dtm
+
 
 
 if __name__=='__main__':
@@ -143,22 +161,38 @@ if __name__=='__main__':
    path_to_muram = sys.argv[2]
    snapshot_id = int(sys.argv[3])
 
-   wavelengths = np.linspace(392.81432, 394.77057, 1912)
+   #wavelengths = np.linspace(392.81432, 394.77057, 1912)
+   # Smaller range for testing:
+   wavelengths = np.linspace(393.06, 393.66, 601)
+
 
    op, em = calc_op_em(pops_file, path_to_muram, snapshot_id, wavelengths,axis=0, otherids=(256, 192))
 
-   # Now let's do a simple 
+   # Now let's do a simple formal solution:
    ds = 32e5 # in km
 
-   dtau = op[:,:] * ds
-   tau = np.cumsum(dtau, axis=1)
-   Sfn = em / op
-   transmission = np.exp(-tau)
-   local_contribution = (1.0 - np.exp(-dtau)) * Sfn
-   outgoing_contribution = local_contribution * transmission
-   I = np.sum(outgoing_contribution, axis=1)
+   I, tau_los = simple_formal_solution(op, em, ds)
    
    kek = fits.PrimaryHDU(I)
    kek.writeto("test_off_limb.fits",overwrite=True)
 
+   # And plot the results, to test:
+   plt.figure(figsize=(10,6))
+   plt.plot(wavelengths, I)
+   plt.savefig("test_off_limb.png")
+
+   # And now the full slit:
+   I_slit = np.zeros((256, len(wavelengths)))
+   for i in tqdm(range(256)):
+       op, em = calc_op_em(pops_file, path_to_muram, snapshot_id, wavelengths,axis=0, otherids=(128, i))
+       I_slit[i,:], tau_los = simple_formal_solution(op, em, ds)
+
+   kek = fits.PrimaryHDU(I_slit)
+   kek.writeto("test_off_limb_slit.fits",overwrite=True)
+
+   # And plot the image:
+   plt.figure(figsize=(10,6))
+   plt.imshow(I_slit, origin='lower', aspect='auto')
+   plt.colorbar()
+   plt.savefig("test_off_limb_slit.png")
 
