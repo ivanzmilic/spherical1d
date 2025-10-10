@@ -11,6 +11,19 @@ import muram as mio
 import scipy.constants as sc
 import sys
 
+from contop import continuum_opacity
+
+def planck(wave, T):
+    """
+    Planck function in cgs units (erg/s/cm^2/sr/Hz)
+    wave: wavelength in cm
+    T: temperature in K
+    """
+    nu = const.c.cgs.value / wave
+    c1 = 2.0 * const.h.cgs.value / const.c.cgs.value**2
+    c2 = const.h.cgs.value / const.k_B.cgs.value
+    B = c1*nu**3 / ((np.exp(c2 *nu / T) - 1.0))
+    return B
 
 def fvoigt(damp, vv):
     """
@@ -46,12 +59,9 @@ def calc_op_em(popfile, murampath, muramid, wavelengths, axis=0, otherids=(0,0))
     # popfile is the population file from promweaver
     # muramid is the muram cube file
 
-  
     # Load the populations:
     pop = fits.open(popfile)[2].data
     
-
-
     # Load the MURaM cube:
     muramcube = mio.MuramSnap(murampath, muramid)
     # Nowe we are coming a bit into the hardcoded territory:
@@ -93,6 +103,12 @@ def calc_op_em(popfile, murampath, muramid, wavelengths, axis=0, otherids=(0,0))
     print(ne_los)
     print(nH_los)
     '''
+    # Fix low temperatures:
+    Tmin = 4000.0
+    Tmax = 1E5
+    T_los = np.copy(T_los)
+    T_los[T_los<Tmin] = Tmin
+    T_los[T_los>Tmax] = Tmax
 
     # Equations for opacity and emissivity:
     # op = (h * nu / 4pi) * (n_l B_lu - n_u B_ul) * phi
@@ -132,9 +148,16 @@ def calc_op_em(popfile, murampath, muramid, wavelengths, axis=0, otherids=(0,0))
     phi = fvoigt(a[None,:], vv)
 
     # Finally calculate op and em, without the loop:
-    op = (const.h.cgs.value * nu0 / (4 * np.pi)) * (pops[0][None,:] * B_lu - pops[2][None,:] * B_ul) * phi / dnu_D
-    em = (const.h.cgs.value * nu0 / (4 * np.pi)) * pops[2][None,:] * A_ul * phi / dnu_D
-  
+    op = (const.h.cgs.value * nu0 / (4 * np.pi)) * (pops[0][None,:] * B_lu - pops[4][None,:] * B_ul) * phi / dnu_D
+    em = (const.h.cgs.value * nu0 / (4 * np.pi)) * pops[4][None,:] * A_ul * phi / dnu_D
+    opc = continuum_opacity(wavelengths[0,None], T_los, ne_los*1E6, nH_los*1E6)/1E2 # in cm^-1
+    emc = opc * planck(wavelengths[0]*1E-7, T_los)
+    op += opc[None,:]
+    em += emc[None,:]
+    
+    #print(op[0], opc)
+    #exit();
+    
     return op, em
 
 def simple_formal_solution(op, em, ds):
@@ -165,6 +188,9 @@ if __name__=='__main__':
    # Smaller range for testing:
    wavelengths = np.linspace(393.06, 393.66, 601)
 
+   #print(continuum_opacity(393.6, 6000, 1E21, 1E23))
+   #exit();
+
 
    op, em = calc_op_em(pops_file, path_to_muram, snapshot_id, wavelengths,axis=0, otherids=(256, 192))
 
@@ -190,9 +216,11 @@ if __name__=='__main__':
    kek = fits.PrimaryHDU(I_slit)
    kek.writeto("test_off_limb_slit.fits",overwrite=True)
 
+   z = np.linspace(0,255,256)*32 # in km
+
    # And plot the image:
    plt.figure(figsize=(10,6))
-   plt.imshow(I_slit, origin='lower', aspect='auto')
+   plt.imshow(I_slit[55:,:], origin='lower', aspect='auto',extent=[wavelengths[0],wavelengths[-1],z[55],z[-1]])
    plt.colorbar()
    plt.savefig("test_off_limb_slit.png")
 
