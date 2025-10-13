@@ -232,20 +232,23 @@ if __name__=='__main__':
    plt.plot(wavelengths, I)
    plt.savefig("test_off_limb.png")
 
+   j = 256 # which y slice to take
+
    # And now the full slit:
    I_slit = np.zeros((256, len(wavelengths)))
    tau_los = np.zeros((256, len(wavelengths)))
    for i in tqdm(range(55,256)):
-       op, em = calc_op_em(pops_file, path_to_muram, snapshot_id, wavelengths,axis=0, otherids=(128, i), refine=refine)
+       op, em = calc_op_em(pops_file, path_to_muram, snapshot_id, wavelengths,axis=0, otherids=(j, i), refine=refine)
        I_slit[i,:], tau_los[i,:] = simple_formal_solution(op, em, ds/refine)
 
    kek = fits.PrimaryHDU(I_slit)
    bur = fits.ImageHDU(tau_los)
    lol = fits.HDUList([kek, bur])
-   lol.writeto("test_off_limb_slit.fits",overwrite=True)
+   lol.writeto(str(j)+"_test_off_limb_slit.fits",overwrite=True)
 
    z = np.linspace(0,255,256)*32 # in km
 
+   '''
    # And plot the image:
    plt.figure(figsize=(10,6))
    plt.imshow(I_slit[55:,:]*1E-3, origin='lower', aspect='auto',extent=[wavelengths[0],wavelengths[-1],z[55],z[-1]])
@@ -270,5 +273,6 @@ if __name__=='__main__':
    plt.colorbar()
    plt.title("$1-e^{-\\tau_\\lambda}$")
    plt.savefig("transmission_off_limb_slit.png")
+   '''
 
 
