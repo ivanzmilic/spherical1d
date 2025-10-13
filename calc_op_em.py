@@ -10,6 +10,7 @@ from astropy.io import fits
 import muram as mio
 import scipy.constants as sc
 import sys
+from scipy.special import wofz
 
 from contop import continuum_opacity
 
@@ -46,13 +47,15 @@ def fvoigt(damp, vv):
 
     h = Z.real
     #f = np.sign(vv) * Z.imag * 0.5
+    z = vv + damp * 1j
+    h = wofz(z).real
 
-    return h
+    return h/1.7724538509055159 # 1/sqrt(pi)
 
 # The goal is to calculate opacity and emissivity from a 3D cube (one slice of which is a 1D atmosphere, at the time):
 # Here we can take any direction (along x,y or z)
 
-def calc_op_em(popfile, murampath, muramid, wavelengths, axis=0, otherids=(0,0)):
+def calc_op_em(popfile, murampath, muramid, wavelengths, axis=0, otherids=(0,0), refine =0):
 
     # axis is the one along which we do the formal solution
     # other_axes are the two perpendicular ones
@@ -60,7 +63,7 @@ def calc_op_em(popfile, murampath, muramid, wavelengths, axis=0, otherids=(0,0))
     # muramid is the muram cube file
 
     # Load the populations:
-    pop = fits.open(popfile)[2].data
+    pop = fits.open(popfile)[2].data.transpose(1,0,2,3) # to fix what we messed up earlier
     
     # Load the MURaM cube:
     muramcube = mio.MuramSnap(murampath, muramid)
@@ -81,16 +84,25 @@ def calc_op_em(popfile, murampath, muramid, wavelengths, axis=0, otherids=(0,0))
 
     elif (axis==1):
         T_los = muramcube.Temp.transpose(1,2,0)[otherids[0],:,otherids[1]+150]
-        v_los = -muramcube.vy.transpose(1,2,0)[otherids[0],:,otherids[1]+150]
+        v_los = -muramcube.vz.transpose(1,2,0)[otherids[0],:,otherids[1]+150]
         ne_los = muramcube.ne.transpose(1,2,0)[otherids[0],:,otherids[1]+150]
         nH_los = (muramcube.Pres.transpose(1,2,0)[otherids[0],:,otherids[1]+150]/(1.38E-16*T_los) - ne_los) * 0.9
-        pops = pop[otherids[0],:,:,NZ-otherids[1]-1].tranpose(1,0)
+        pops = pop[otherids[0],:,:,NZ-otherids[1]-1].transpose(1,0)
 
     else: return 0 # zeros
 
     #print (pops.shape)
 
     pops /= 1E6 # to convert to cm^-3
+
+    from scipy.interpolate import interp1d  
+    if (refine):
+        # Interpolate to a finer grid:
+        T_los = interp1d(np.arange(len(T_los)), T_los, kind='cubic')(np.linspace(0,len(T_los)-1,len(T_los)*refine))
+        v_los = interp1d(np.arange(len(v_los)), v_los, kind='cubic')(np.linspace(0,len(v_los)-1,len(v_los)*refine))
+        ne_los = interp1d(np.arange(len(ne_los)), ne_los, kind='cubic')(np.linspace(0,len(ne_los)-1,len(ne_los)*refine))
+        nH_los = interp1d(np.arange(len(nH_los)), nH_los, kind='cubic')(np.linspace(0,len(nH_los)-1,len(nH_los)*refine))
+        pops = interp1d(np.arange(pops.shape[1]), pops, kind='cubic', axis=1)(np.linspace(0,pops.shape[1]-1,pops.shape[1]*refine))
 
     #print(pops)
 
@@ -103,7 +115,7 @@ def calc_op_em(popfile, murampath, muramid, wavelengths, axis=0, otherids=(0,0))
     print(ne_los)
     print(nH_los)
     '''
-    # Fix low temperatures:
+    # Fix low and high temperatures:
     Tmin = 4000.0
     Tmax = 1E5
     T_los = np.copy(T_los)
@@ -123,6 +135,8 @@ def calc_op_em(popfile, murampath, muramid, wavelengths, axis=0, otherids=(0,0))
     nu0 = const.c.cgs.value / llambda0
     A_ul = 1.47E8
     B_ul = (const.c.cgs.value**2 / (2 * const.h.cgs.value * nu0**3.0)) * A_ul
+    #print(B_ul/1E9)
+    #exit();
     B_lu = (g_u / g_l) * B_ul
     #print (B_lu, B_ul, A_ul)
     gamma = A_ul # natural broadening only
@@ -149,7 +163,13 @@ def calc_op_em(popfile, murampath, muramid, wavelengths, axis=0, otherids=(0,0))
 
     # Finally calculate op and em, without the loop:
     op = (const.h.cgs.value * nu0 / (4 * np.pi)) * (pops[0][None,:] * B_lu - pops[4][None,:] * B_ul) * phi / dnu_D
+    #em = op * planck(393.36E-7, T_los)[None,:]
+    
     em = (const.h.cgs.value * nu0 / (4 * np.pi)) * pops[4][None,:] * A_ul * phi / dnu_D
+    
+    # Stemp:
+    #Stemp = pops[4] * A_ul / pops[0] / B_lu
+    #print (Stemp[::20])
     opc = continuum_opacity(wavelengths[0,None], T_los, ne_los*1E6, nH_los*1E6)/1E2 # in cm^-1
     emc = opc * planck(wavelengths[0]*1E-7, T_los)
     op += opc[None,:]
@@ -165,6 +185,10 @@ def simple_formal_solution(op, em, ds):
     dtau = op[:,:] * ds
     tau = np.cumsum(dtau, axis=1)
     Sfn = em / op
+    #print (Sfn[300,::10])
+    #print(op[300])
+    #print(em[300])    
+    #exit();
     transmission = np.exp(-tau)
     smalltau = np.where(tau<1E-2)
     transmission[smalltau] = 1.0 - tau[smalltau] + 0.5 * tau[smalltau]**2 - (1.0/6.0) * tau[smalltau]**3
@@ -173,8 +197,7 @@ def simple_formal_solution(op, em, ds):
     # Now integrate over z (axis=1):
     outgoing_contribution = local_contribution * transmission
     I = np.sum(outgoing_contribution, axis=1)
-    dtm = np.amax(tau)
-    return I, dtm
+    return I, tau[:,-1]
 
 
 
@@ -191,13 +214,15 @@ if __name__=='__main__':
    #print(continuum_opacity(393.6, 6000, 1E21, 1E23))
    #exit();
 
+   refine = 4
 
-   op, em = calc_op_em(pops_file, path_to_muram, snapshot_id, wavelengths,axis=0, otherids=(256, 192))
+
+   op, em = calc_op_em(pops_file, path_to_muram, snapshot_id, wavelengths,axis=0, otherids=(256, 192), refine=refine)
 
    # Now let's do a simple formal solution:
-   ds = 32e5 # in km
+   ds = 32e5 # in cm, MURaM grid spacing
 
-   I, tau_los = simple_formal_solution(op, em, ds)
+   I, tau_los = simple_formal_solution(op, em, ds/refine)
    
    kek = fits.PrimaryHDU(I)
    kek.writeto("test_off_limb.fits",overwrite=True)
@@ -209,18 +234,41 @@ if __name__=='__main__':
 
    # And now the full slit:
    I_slit = np.zeros((256, len(wavelengths)))
-   for i in tqdm(range(256)):
-       op, em = calc_op_em(pops_file, path_to_muram, snapshot_id, wavelengths,axis=0, otherids=(128, i))
-       I_slit[i,:], tau_los = simple_formal_solution(op, em, ds)
+   tau_los = np.zeros((256, len(wavelengths)))
+   for i in tqdm(range(55,256)):
+       op, em = calc_op_em(pops_file, path_to_muram, snapshot_id, wavelengths,axis=0, otherids=(128, i), refine=refine)
+       I_slit[i,:], tau_los[i,:] = simple_formal_solution(op, em, ds/refine)
 
    kek = fits.PrimaryHDU(I_slit)
-   kek.writeto("test_off_limb_slit.fits",overwrite=True)
+   bur = fits.ImageHDU(tau_los)
+   lol = fits.HDUList([kek, bur])
+   lol.writeto("test_off_limb_slit.fits",overwrite=True)
 
    z = np.linspace(0,255,256)*32 # in km
 
    # And plot the image:
    plt.figure(figsize=(10,6))
-   plt.imshow(I_slit[55:,:], origin='lower', aspect='auto',extent=[wavelengths[0],wavelengths[-1],z[55],z[-1]])
+   plt.imshow(I_slit[55:,:]*1E-3, origin='lower', aspect='auto',extent=[wavelengths[0],wavelengths[-1],z[55],z[-1]])
+   plt.xlim(wavelengths[0], wavelengths[-1])
+   plt.ylim(z[55], z[-1])
    plt.colorbar()
    plt.savefig("test_off_limb_slit.png")
+
+   # And the same for tau
+   plt.figure(figsize=(10,6))
+   plt.imshow(tau_los[55:,:], origin='lower', aspect='auto',extent=[wavelengths[0],wavelengths[-1],z[55],z[-1]])
+   plt.xlim(wavelengths[0], wavelengths[-1])
+   plt.ylim(z[55], z[-1])
+   plt.colorbar()
+   plt.savefig("tau_off_limb_slit.png")
+
+   # And the same for tau
+   plt.figure(figsize=(10,6))
+   plt.imshow((1.0 - np.exp(-tau_los[55:,:])), origin='lower', aspect='auto',extent=[wavelengths[0],wavelengths[-1],z[55],z[-1]])
+   plt.xlim(wavelengths[0], wavelengths[-1])
+   plt.ylim(z[55], z[-1])
+   plt.colorbar()
+   plt.title("$1-e^{-\\tau_\\lambda}$")
+   plt.savefig("transmission_off_limb_slit.png")
+
 
