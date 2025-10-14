@@ -215,9 +215,11 @@ if __name__=='__main__':
    #exit();
 
    refine = 4
+   
+   j = 512 # which y slice to take
 
 
-   op, em = calc_op_em(pops_file, path_to_muram, snapshot_id, wavelengths,axis=0, otherids=(256, 192), refine=refine)
+   op, em = calc_op_em(pops_file, path_to_muram, snapshot_id, wavelengths,axis=0, otherids=(j, 192), refine=refine)
 
    # Now let's do a simple formal solution:
    ds = 32e5 # in cm, MURaM grid spacing
@@ -232,7 +234,6 @@ if __name__=='__main__':
    plt.plot(wavelengths, I)
    plt.savefig("test_off_limb.png")
 
-   j = 256 # which y slice to take
 
    # And now the full slit:
    I_slit = np.zeros((256, len(wavelengths)))
