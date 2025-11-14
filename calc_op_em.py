@@ -192,12 +192,14 @@ def simple_formal_solution(op, em, ds):
     transmission = np.exp(-tau)
     smalltau = np.where(tau<1E-2)
     transmission[smalltau] = 1.0 - tau[smalltau] + 0.5 * tau[smalltau]**2 - (1.0/6.0) * tau[smalltau]**3
+    
     local_contribution = (1.0 - transmission) * Sfn
     local_contribution[smalltau] = dtau[smalltau] * Sfn[smalltau] * (1.0 - 0.5 * dtau[smalltau] + (1.0/6.0) * dtau[smalltau]**2 - (1.0/24.0) * dtau[smalltau]**3)
     # Now integrate over z (axis=1):
     outgoing_contribution = local_contribution * transmission
+    contribution_function_noS = transmission * op
     I = np.sum(outgoing_contribution, axis=1)
-    return I, tau[:,-1]
+    return I, tau[:,-1], contribution_function_noS
 
 
 
@@ -214,9 +216,9 @@ if __name__=='__main__':
    #print(continuum_opacity(393.6, 6000, 1E21, 1E23))
    #exit();
 
-   refine = 4
+   refine = 2
    
-   j = 512 # which y slice to take
+   j = 620 # which y slice to take
 
 
    op, em = calc_op_em(pops_file, path_to_muram, snapshot_id, wavelengths,axis=0, otherids=(j, 192), refine=refine)
@@ -224,7 +226,7 @@ if __name__=='__main__':
    # Now let's do a simple formal solution:
    ds = 32e5 # in cm, MURaM grid spacing
 
-   I, tau_los = simple_formal_solution(op, em, ds/refine)
+   I, tau_los, temp = simple_formal_solution(op, em, ds/refine)
    
    kek = fits.PrimaryHDU(I)
    kek.writeto("test_off_limb.fits",overwrite=True)
@@ -238,16 +240,20 @@ if __name__=='__main__':
    # And now the full slit:
    I_slit = np.zeros((256, len(wavelengths)))
    tau_los = np.zeros((256, len(wavelengths)))
+   outgoing_contribution = np.zeros([256, len(wavelengths), 768*2])
    for i in tqdm(range(55,256)):
        op, em = calc_op_em(pops_file, path_to_muram, snapshot_id, wavelengths,axis=0, otherids=(j, i), refine=refine)
-       I_slit[i,:], tau_los[i,:] = simple_formal_solution(op, em, ds/refine)
+       I_slit[i,:], tau_los[i,:], outgoing_contribution[i,:,:] = simple_formal_solution(op, em, ds/refine)
 
    kek = fits.PrimaryHDU(I_slit)
    bur = fits.ImageHDU(tau_los)
-   lol = fits.HDUList([kek, bur])
+   bur2 = fits.ImageHDU(outgoing_contribution)
+   lol = fits.HDUList([kek, bur, bur2])
    lol.writeto(str(j)+"_test_off_limb_slit.fits",overwrite=True)
 
    z = np.linspace(0,255,256)*32 # in km
+
+
 
    '''
    # And plot the image:
