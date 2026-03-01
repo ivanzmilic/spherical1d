@@ -48,6 +48,8 @@ def sphere_trace_semi_inf(ctx, limbdistance, ds = 50):
     intersections = compute_intersections(p0, d)
 
     num_lambda = ctx.spect.wavelength.shape[0]
+
+    #print(intersections)
     
     if intersections is None:
         #raise ValueError("Pass a sane mu_out pls")
@@ -144,8 +146,7 @@ def formal_solution_slit(input_atmos=None):
         selected atomic models, and active atoms. This can then be used with a
         DynamicContextPromBcProvider.
         """
-
-    
+        
         atomic_models = pw.default_atomic_models()
         atmos = input_atmos
         atmos.quadrature(5)
@@ -159,72 +160,86 @@ def formal_solution_slit(input_atmos=None):
         default_ctx = lw.Context(atmos, spect, eq_pops, Nthreads=6, hprd=True)
         lw.iterate_ctx_se(default_ctx, prd=True, quiet=True)
 
-    atlas_wavegrid = np.linspace(391.0, 396.0, 2001)
-
-    I, susi_ctx = default_ctx.compute_rays(wavelengths=lw.air_to_vac(atlas_wavegrid), mus=1.0, returnCtx=True)
+    # Do two different slits, one for the disk center, as a debug, and one for the limb to compare with susi
+    
+    # First comes the test:
+    test_wavegrid = np.linspace(391.0, 396.0, 2001)
+    I, susi_ctx = default_ctx.compute_rays(wavelengths=lw.air_to_vac(test_wavegrid), mus=1.0, returnCtx=True)
     susi_ctx.depthData.fill = True
     susi_ctx.formal_sol_gamma_matrices()
+    spec_test = fits.PrimaryHDU(I)
+    ll_test = fits.ImageHDU(test_wavegrid)
+    test_hdu = fits.HDUList([spec_test, ll_test])
+    test_hdu.writeto("disk_center_test.fits", overwrite=True)
 
-    kek = fits.PrimaryHDU(I)
-    kek.writeto("atlas_disk_center.fits", overwrite=True)
-
-    susi_wavegrid = np.linspace(392.81432, 394.77057, 1912)
+    # Then comes the actual SUSI slit:
+    #susi_wavegrid = np.linspace(392.81432, 394.77057, 1912)
+    susi_wavegrid = np.loadtxt("susi_wavelength_axis.txt",unpack=True)
     I, susi_ctx = default_ctx.compute_rays(wavelengths=lw.air_to_vac(susi_wavegrid), mus=1.0, returnCtx=True)
     susi_ctx.depthData.fill = True
     susi_ctx.formal_sol_gamma_matrices()
+    spec_susi_dc = fits.PrimaryHDU(I)
+    ll_susi_dc = fits.ImageHDU(susi_wavegrid)
+    susi_dc_hdu = fits.HDUList([spec_susi_dc, ll_susi_dc])
+    susi_dc_hdu.writeto("disk_center_susi.fits", overwrite=True)
 
     # Experimentation, to show the point:
     #num_distances = 1000
     #limbdistances = np.arange(num_distances) * 50.0+20.0 # exact zero does not work very well. larger limb distance is closer to the disk center.
     #limbdistances *= 1e3 # convert to m please 
     # Actualy SUSI:
-    num_distances = 1557
-    limbdistances = (np.arange(num_distances) - 784)*19.25+1.0 # Don't hit exactly 0
+    limbdistances = np.loadtxt("susi_limb_distances.txt", unpack=True)+1.0 # add 1 km to avoid zero
     limbdistances *= 1e3
-    #limbdistances = limbdistances[783:788]
     num_distances = len(limbdistances)
+    print("info::loaded the limb distance grid. number of limb distances is: ", num_distances)
+    print(limbdistances)
+    #limbdistances = limbdistances[::-1]
     
     Rs = const.R_sun.value
     #mus = np.sqrt(1.0 - ((Rs-limbdistances)/Rs)**2.0)
     total_z = susi_ctx.atmos.z[0] - susi_ctx.atmos.z[-1] 
 
+    
     num_lambda = len(susi_ctx.spect.wavelength)
     I = np.zeros([num_distances, num_lambda])
     paths = np.zeros(num_distances)
     taus = np.zeros([num_distances, num_lambda])
     for m in tqdm(range(0, num_distances)):
-    #for m in range(0,NX):
         spec, temp, total_path, total_tau = sphere_trace_semi_inf(susi_ctx, limbdistances[m], 25.0)
         I[m,:] = spec 
         paths[m] = total_path
         taus[m,:] = total_tau
 
-    return I, limbdistances, paths, taus
 
-    #kek = fits.PrimaryHDU(I)
-    #kek2 = fits.ImageHDU(limbdistances)
-    #bur = fits.ImageHDU(paths)
-    #lol = fits.ImageHDU(taus)
+    kek = fits.PrimaryHDU(I)
+    kek2 = fits.ImageHDU(limbdistances)
+    bur = fits.ImageHDU(paths)
+    lol = fits.ImageHDU(taus)
 
-
-    #listerino = fits.HDUList([kek,kek2, bur,lol])
+    listerino = fits.HDUList([kek,kek2, bur,lol])
     #listerino.writeto("demonstration.fits", overwrite=True)
-    #listerino.writeto("susi_synth.fits", overwrite=True)
+    listerino.writeto("susi_synth_1d.fits", overwrite=True)
+
+    return I, limbdistances, paths, taus
 
 if __name__=='__main__':
 
-    #test_slit = formal_solution_slit()
+    
+    # This is from the default FALC atmosphere:
+    test_slit = formal_solution_slit()
 
     # Now let's load some radyn atmosphere:
 
-    ds = xr.open_dataset("radyn_out_vars.nc")
+    #ds = xr.open_dataset("radyn_out_vars.nc")
 
-    t = 0 
+    #t = 0 
 
     # Note that RADYN Is CGS, and LW is SI
 
-    atmos1d = lw.Atmosphere.make_1d(scale = lw.ScaleType.Geometric, depthScale = ds.z[t].values * 1E-2, temperature = ds.temperature[t].values, \
-        vlos = ds.vz[t].values * 1E-2, vturb = np.ones(300)*2E3, ne = ds.ne[t].values*1E6, \
-        nHTot = ds.dens[t].values / (lw.DefaultAtomicAbundance.avgMass * lw.Amu*1E3) * 1E6)
+    #atmos1d = lw.Atmosphere.make_1d(scale = lw.ScaleType.Geometric, depthScale = ds.z[t].values * 1E-2, temperature = ds.temperature[t].values, \
+    #    vlos = ds.vz[t].values * 1E-2, vturb = np.ones(300)*2E3, ne = ds.ne[t].values*1E6, \
+    #    nHTot = ds.dens[t].values / (lw.DefaultAtomicAbundance.avgMass * lw.Amu*1E3) * 1E6)
 
-    test_slit = formal_solution_slit(atmos1d)
+    # This is from a custom atmosphere
+    #test_slit = formal_solution_slit(atmos1d)
+
