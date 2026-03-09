@@ -172,6 +172,18 @@ def formal_solution_slit(input_atmos=None):
     test_hdu = fits.HDUList([spec_test, ll_test])
     test_hdu.writeto("disk_center_test.fits", overwrite=True)
 
+    # But this one also needs to spit out the opacities and emissivities for understanding the source function structuring: 
+    opem = np.zeros((2, len(susi_ctx.atmos.z), len(test_wavegrid)))
+    opem[0] = np.copy(susi_ctx.depthData.chi[:,0,0,::-1].T)
+    opem[1] = np.copy(susi_ctx.depthData.eta[:,0,0,::-1].T)
+
+    z = np.copy(susi_ctx.atmos.z[::-1])
+    
+    opem_hdu = fits.PrimaryHDU(opem)
+    z_hdu = fits.ImageHDU(z)
+    opem_cube = fits.HDUList([opem_hdu, z_hdu])
+    opem_cube.writeto("disk_center_test_opem.fits", overwrite=True)
+
     # Then comes the actual SUSI slit:
     #susi_wavegrid = np.linspace(392.81432, 394.77057, 1912)
     susi_wavegrid = np.loadtxt("susi_wavelength_axis.txt",unpack=True)
@@ -218,7 +230,7 @@ def formal_solution_slit(input_atmos=None):
 
     listerino = fits.HDUList([kek,kek2, bur,lol])
     #listerino.writeto("demonstration.fits", overwrite=True)
-    listerino.writeto("susi_synth_1d.fits", overwrite=True)
+    listerino.writeto("susi_synth_1d_muram.fits", overwrite=True)
 
     return I, limbdistances, paths, taus
 
@@ -242,4 +254,15 @@ if __name__=='__main__':
 
     # This is from a custom atmosphere
     #test_slit = formal_solution_slit(atmos1d)
+
+    # Or let's load a pre-prepared atmosphere from the MURAM thing
+    #muram_atmos = np.load("/home/milic/codes/spherical1d/lwatm.npy")
+    #print ("info:: loaded the MURaM atmosphere, with shape: ", muram_atmos.shape)
+
+    #atmos1d = lw.Atmosphere.make_1d(scale = lw.ScaleType.Geometric, depthScale = muram_atmos[0] * 1E-2, temperature = muram_atmos[1], \
+    #    vlos = muram_atmos[3] * 1E-2, vturb = muram_atmos[4]*1E-2, Pgas = muram_atmos[2]*1E-1)
+    
+    #test_slit = formal_solution_slit(atmos1d)
+
+
 

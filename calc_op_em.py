@@ -55,7 +55,7 @@ def fvoigt(damp, vv):
 # The goal is to calculate opacity and emissivity from a 3D cube (one slice of which is a 1D atmosphere, at the time):
 # Here we can take any direction (along x,y or z)
 
-def calc_op_em(popfile, murampath, muramid, wavelengths, axis=0, otherids=(0,0), refine =0):
+def calc_op_em(popfile, murampath, muramid, wavelengths, axis=0, otherids=(0,0), refine =0, take_given_S=False):
 
     # axis is the one along which we do the formal solution
     # other_axes are the two perpendicular ones
@@ -63,7 +63,7 @@ def calc_op_em(popfile, murampath, muramid, wavelengths, axis=0, otherids=(0,0),
     # muramid is the muram cube file
 
     # Load the populations:
-    pop = fits.open(popfile)[2].data.transpose(1,0,2,3) # to fix what we messed up earlier
+    pop = fits.open(popfile)[2].data[:,:,:,::-1] # Swap z to make it easier below:
     
     # Load the MURaM cube:
     muramcube = mio.MuramSnap(murampath, muramid)
@@ -75,19 +75,21 @@ def calc_op_em(popfile, murampath, muramid, wavelengths, axis=0, otherids=(0,0),
 
     NZ = pop.shape[-1]
 
+    z_offset = 15
+
     if (axis==0):
-        T_los = muramcube.Temp.transpose(1,2,0)[:,otherids[0],otherids[1]+150]
-        v_los = -muramcube.vy.transpose(1,2,0)[:,otherids[0],otherids[1]+150]
-        ne_los = muramcube.ne.transpose(1,2,0)[:,otherids[0],otherids[1]+150]
-        nH_los = (muramcube.Pres.transpose(1,2,0)[:,otherids[0],otherids[1]+150]/(1.38E-16*T_los) - ne_los) * 0.9
-        pops = pop[:,otherids[0],:,NZ-otherids[1]-1].transpose(1,0)
+        T_los = muramcube.Temp.transpose(1,2,0)[:,otherids[0],otherids[1]+z_offset]
+        v_los = muramcube.vy.transpose(1,2,0)[:,otherids[0],otherids[1]+z_offset]
+        ne_los = muramcube.ne.transpose(1,2,0)[:,otherids[0],otherids[1]+z_offset]
+        nH_los = (muramcube.Pres.transpose(1,2,0)[:,otherids[0],otherids[1]+z_offset]/(1.38E-16*T_los) - ne_los) * 0.9
+        pops = pop[:,otherids[0],:,otherids[1]].transpose(1,0)
 
     elif (axis==1):
-        T_los = muramcube.Temp.transpose(1,2,0)[otherids[0],:,otherids[1]+150]
-        v_los = -muramcube.vz.transpose(1,2,0)[otherids[0],:,otherids[1]+150]
-        ne_los = muramcube.ne.transpose(1,2,0)[otherids[0],:,otherids[1]+150]
-        nH_los = (muramcube.Pres.transpose(1,2,0)[otherids[0],:,otherids[1]+150]/(1.38E-16*T_los) - ne_los) * 0.9
-        pops = pop[otherids[0],:,:,NZ-otherids[1]-1].transpose(1,0)
+        T_los = muramcube.Temp.transpose(1,2,0)[otherids[0],:,otherids[1]+z_offset]
+        v_los = muramcube.vz.transpose(1,2,0)[otherids[0],:,otherids[1]+z_offset]
+        ne_los = muramcube.ne.transpose(1,2,0)[otherids[0],:,otherids[1]+z_offset]
+        nH_los = (muramcube.Pres.transpose(1,2,0)[otherids[0],:,otherids[1]+z_offset]/(1.38E-16*T_los) - ne_los) * 0.9
+        pops = pop[otherids[0],:,:,otherids[1]].transpose(1,0)
 
     else: return 0 # zeros
 
@@ -166,12 +168,25 @@ def calc_op_em(popfile, murampath, muramid, wavelengths, axis=0, otherids=(0,0),
     #em = op * planck(393.36E-7, T_los)[None,:]
     
     em = (const.h.cgs.value * nu0 / (4 * np.pi)) * pops[4][None,:] * A_ul * phi / dnu_D
+
+    # If we want to take the given source function from the population file, we can do that here:
+    if (take_given_S):
+        opem = fits.open("/home/milic/codes/spherical1d/disk_center_test_opem_muram.fits")[0].data[:,otherids[1],:]
+        S = opem[1]/opem[0]
+        opemline = opem - opem[:,0][:,None]
+        Sline = opemline[1,947]/opemline[0,947]
+        em = op * Sline
     
     # Stemp:
     #Stemp = pops[4] * A_ul / pops[0] / B_lu
     #print (Stemp[::20])
     opc = continuum_opacity(wavelengths[0,None], T_los, ne_los*1E6, nH_los*1E6)/1E2 # in cm^-1
     emc = opc * planck(wavelengths[0]*1E-7, T_los)
+    if (take_given_S):
+        opemc = fits.open("/home/milic/codes/spherical1d/disk_center_test_opem_muram.fits")[0].data[:,otherids[1],0]
+        Sc = opemc[1]/opemc[0]
+        emc = opc * Sc
+    
     op += opc[None,:]
     em += emc[None,:]
     
@@ -204,82 +219,46 @@ def simple_formal_solution(op, em, ds):
 
 
 if __name__=='__main__':
-   
-   pops_file= sys.argv[1]
-   path_to_muram = sys.argv[2]
-   snapshot_id = int(sys.argv[3])
+    pops_file= sys.argv[1]
+    path_to_muram = sys.argv[2]
+    snapshot_id = int(sys.argv[3])
+    i = int(sys.argv[4])
 
-   #wavelengths = np.linspace(392.81432, 394.77057, 1912)
-   # Smaller range for testing:
-   wavelengths = np.linspace(393.06, 393.66, 601)
+    # Smaller range for testing:
+    wavelengths = np.linspace(393.06, 393.66, 601)
 
-   #print(continuum_opacity(393.6, 6000, 1E21, 1E23))
-   #exit();
+    refine = 2
 
-   refine = 2
-   
-   j = 620 # which y slice to take
+    ktest = 192
+    
+    op, em = calc_op_em(pops_file, path_to_muram, snapshot_id, wavelengths, axis=1, otherids=(i, 192), refine=refine)
 
+    # Now let's do a simple formal solution:
+    ds = 24e5 # in cm, MURaM grid spacing
+    I, tau_los, temp = simple_formal_solution(op, em, ds/refine)
+    print(tau_los.shape)
 
-   op, em = calc_op_em(pops_file, path_to_muram, snapshot_id, wavelengths,axis=0, otherids=(j, 192), refine=refine)
-
-   # Now let's do a simple formal solution:
-   ds = 32e5 # in cm, MURaM grid spacing
-
-   I, tau_los, temp = simple_formal_solution(op, em, ds/refine)
-   
-   kek = fits.PrimaryHDU(I)
-   kek.writeto("test_off_limb.fits",overwrite=True)
-
-   # And plot the results, to test:
-   plt.figure(figsize=(10,6))
-   plt.plot(wavelengths, I)
-   plt.savefig("test_off_limb.png")
+    # And plot the results, to test:
+    plt.figure(figsize=(10,6))
+    I_proxy = 1.0 - np.exp(-tau_los)
+    plt.plot(wavelengths, I_proxy)
+    plt.savefig("figs/"+str(i)+"_"+str(ktest)+"_test_off_limb.png")
+    #exit();
 
 
-   # And now the full slit:
-   I_slit = np.zeros((256, len(wavelengths)))
-   tau_los = np.zeros((256, len(wavelengths)))
-   outgoing_contribution = np.zeros([256, len(wavelengths), 768*2])
-   for i in tqdm(range(55,256)):
-       op, em = calc_op_em(pops_file, path_to_muram, snapshot_id, wavelengths,axis=0, otherids=(j, i), refine=refine)
-       I_slit[i,:], tau_los[i,:], outgoing_contribution[i,:,:] = simple_formal_solution(op, em, ds/refine)
+    # And now the full slit:
+    # actually repeat for multiple slits: 
 
-   kek = fits.PrimaryHDU(I_slit)
-   bur = fits.ImageHDU(tau_los)
-   bur2 = fits.ImageHDU(outgoing_contribution)
-   lol = fits.HDUList([kek, bur, bur2])
-   lol.writeto(str(j)+"_test_off_limb_slit.fits",overwrite=True)
+    for i in range(0,8):
+        I_slit = np.zeros((401, len(wavelengths)))
+        tau_los = np.zeros((401, len(wavelengths)))
+        outgoing_contribution = np.zeros([401, len(wavelengths), 1024*1])
+        for k in tqdm(range(0,401)):
+            op, em = calc_op_em(pops_file, path_to_muram, snapshot_id, wavelengths, axis=1, otherids=(i, k), refine=0, take_given_S=False)
+            I_slit[k,:], tau_los[k,:], outgoing_contribution[k,:,:] = simple_formal_solution(op, em, ds/refine)
 
-   z = np.linspace(0,255,256)*32 # in km
-
-
-
-   '''
-   # And plot the image:
-   plt.figure(figsize=(10,6))
-   plt.imshow(I_slit[55:,:]*1E-3, origin='lower', aspect='auto',extent=[wavelengths[0],wavelengths[-1],z[55],z[-1]])
-   plt.xlim(wavelengths[0], wavelengths[-1])
-   plt.ylim(z[55], z[-1])
-   plt.colorbar()
-   plt.savefig("test_off_limb_slit.png")
-
-   # And the same for tau
-   plt.figure(figsize=(10,6))
-   plt.imshow(tau_los[55:,:], origin='lower', aspect='auto',extent=[wavelengths[0],wavelengths[-1],z[55],z[-1]])
-   plt.xlim(wavelengths[0], wavelengths[-1])
-   plt.ylim(z[55], z[-1])
-   plt.colorbar()
-   plt.savefig("tau_off_limb_slit.png")
-
-   # And the same for tau
-   plt.figure(figsize=(10,6))
-   plt.imshow((1.0 - np.exp(-tau_los[55:,:])), origin='lower', aspect='auto',extent=[wavelengths[0],wavelengths[-1],z[55],z[-1]])
-   plt.xlim(wavelengths[0], wavelengths[-1])
-   plt.ylim(z[55], z[-1])
-   plt.colorbar()
-   plt.title("$1-e^{-\\tau_\\lambda}$")
-   plt.savefig("transmission_off_limb_slit.png")
-   '''
-
-
+        kek = fits.PrimaryHDU(I_slit)
+        bur = fits.ImageHDU(tau_los)
+        bur2 = fits.ImageHDU(outgoing_contribution)
+        lol = fits.HDUList([kek, bur, bur2])
+        lol.writeto("/dat/milic/SUSI_modeling/"+str(i)+"_test_off_limb_che_slit.fits",overwrite=True)
