@@ -1,12 +1,14 @@
 import numpy as np
 import matplotlib.pyplot as plt
+
 import lightweaver as lw
 import promweaver as pw
+
 import astropy.constants as const
 from tqdm import tqdm
 from matplotlib.colors import LogNorm
 from astropy.io import fits
-import xarray as xr
+#import xarray as xr # You only need this if you are going to work with radyn atmospheres
 
 # Based on a quick and dirty, but amazing, routine written by CMO @ Freiburg in May 2024
 # IM: Tuning it a little bit to my taste and then gonna use with opacities and emissivities output by LW
@@ -128,7 +130,7 @@ def sphere_trace_semi_inf(ctx, limbdistance, ds = 50):
 
 mu_grid = np.linspace(0.01, 0.02, 2)
 
-def formal_solution_slit(input_atmos=None):
+def formal_solution_slit(input_atmos=None, calculate_disk_center=False,):
 
     
     if (input_atmos == None):   
@@ -163,28 +165,29 @@ def formal_solution_slit(input_atmos=None):
     # Do two different slits, one for the disk center, as a debug, and one for the limb to compare with susi
     
     # First comes the test:
-    test_wavegrid = np.linspace(391.0, 396.0, 2001)
-    I, susi_ctx = default_ctx.compute_rays(wavelengths=lw.air_to_vac(test_wavegrid), mus=1.0, returnCtx=True)
-    susi_ctx.depthData.fill = True
-    susi_ctx.formal_sol_gamma_matrices()
-    spec_test = fits.PrimaryHDU(I)
-    ll_test = fits.ImageHDU(test_wavegrid)
-    test_hdu = fits.HDUList([spec_test, ll_test])
-    test_hdu.writeto("disk_center_test.fits", overwrite=True)
+    if (calculate_disk_center == True):
+        test_wavegrid = np.linspace(391.0, 396.0, 2001)
+        I, susi_ctx = default_ctx.compute_rays(wavelengths=lw.air_to_vac(test_wavegrid), mus=1.0, returnCtx=True)
+        susi_ctx.depthData.fill = True
+        susi_ctx.formal_sol_gamma_matrices()
+        spec_test = fits.PrimaryHDU(I)
+        ll_test = fits.ImageHDU(test_wavegrid)
+        test_hdu = fits.HDUList([spec_test, ll_test])
+        test_hdu.writeto("disk_center_test.fits", overwrite=True)
 
-    # But this one also needs to spit out the opacities and emissivities for understanding the source function structuring: 
-    opem = np.zeros((2, len(susi_ctx.atmos.z), len(test_wavegrid)))
-    opem[0] = np.copy(susi_ctx.depthData.chi[:,0,0,::-1].T)
-    opem[1] = np.copy(susi_ctx.depthData.eta[:,0,0,::-1].T)
-
-    z = np.copy(susi_ctx.atmos.z[::-1])
+        # But this one also needs to spit out the opacities and emissivities for understanding the source function structuring: 
+        opem = np.zeros((2, len(susi_ctx.atmos.z), len(test_wavegrid)))
+        opem[0] = np.copy(susi_ctx.depthData.chi[:,0,0,::-1].T)
+        opem[1] = np.copy(susi_ctx.depthData.eta[:,0,0,::-1].T)
+        z = np.copy(susi_ctx.atmos.z[::-1])
     
-    opem_hdu = fits.PrimaryHDU(opem)
-    z_hdu = fits.ImageHDU(z)
-    opem_cube = fits.HDUList([opem_hdu, z_hdu])
-    opem_cube.writeto("disk_center_test_opem.fits", overwrite=True)
+        opem_hdu = fits.PrimaryHDU(opem)
+        z_hdu = fits.ImageHDU(z)
+        opem_cube = fits.HDUList([opem_hdu, z_hdu])
+        opem_cube.writeto("disk_center_test_opem.fits", overwrite=True)
 
-    # Then comes the actual SUSI slit:
+    # Then comes the actual SUSI wavegrid:
+    # This susi spectrum is at the disk cente,r and is used to normalize our calculations at thelimb
     #susi_wavegrid = np.linspace(392.81432, 394.77057, 1912)
     susi_wavegrid = np.loadtxt("susi_wavelength_axis.txt",unpack=True)
     I, susi_ctx = default_ctx.compute_rays(wavelengths=lw.air_to_vac(susi_wavegrid), mus=1.0, returnCtx=True)
@@ -195,23 +198,16 @@ def formal_solution_slit(input_atmos=None):
     susi_dc_hdu = fits.HDUList([spec_susi_dc, ll_susi_dc])
     susi_dc_hdu.writeto("disk_center_susi.fits", overwrite=True)
 
-    # Experimentation, to show the point:
-    #num_distances = 1000
-    #limbdistances = np.arange(num_distances) * 50.0+20.0 # exact zero does not work very well. larger limb distance is closer to the disk center.
-    #limbdistances *= 1e3 # convert to m please 
-    # Actualy SUSI:
+    # Finally we have SUSI slit for the desired limb distances, that will be compared to the observations:
     limbdistances = np.loadtxt("susi_limb_distances.txt", unpack=True)+1.0 # add 1 km to avoid zero
     limbdistances *= 1e3
     num_distances = len(limbdistances)
     print("info::loaded the limb distance grid. number of limb distances is: ", num_distances)
     print(limbdistances)
-    #limbdistances = limbdistances[::-1]
     
     Rs = const.R_sun.value
-    #mus = np.sqrt(1.0 - ((Rs-limbdistances)/Rs)**2.0)
     total_z = susi_ctx.atmos.z[0] - susi_ctx.atmos.z[-1] 
 
-    
     num_lambda = len(susi_ctx.spect.wavelength)
     I = np.zeros([num_distances, num_lambda])
     paths = np.zeros(num_distances)
@@ -223,14 +219,14 @@ def formal_solution_slit(input_atmos=None):
         taus[m,:] = total_tau
 
 
-    kek = fits.PrimaryHDU(I)
-    kek2 = fits.ImageHDU(limbdistances)
-    bur = fits.ImageHDU(paths)
-    lol = fits.ImageHDU(taus)
+    hduI = fits.PrimaryHDU(I)
+    hduld = fits.ImageHDU(limbdistances)
+    hdupaths = fits.ImageHDU(paths)
+    hdutaus = fits.ImageHDU(taus)
 
-    listerino = fits.HDUList([kek,kek2, bur,lol])
-    #listerino.writeto("demonstration.fits", overwrite=True)
-    listerino.writeto("susi_synth_1d_muram.fits", overwrite=True)
+    list = fits.HDUList([hduI, hduld, hdupaths, hdutaus])
+    #list.writeto("demonstration.fits", overwrite=True)
+    list.writeto("susi_synth_1d.fits", overwrite=True)
 
     return I, limbdistances, paths, taus
 
@@ -240,6 +236,7 @@ if __name__=='__main__':
     # This is from the default FALC atmosphere:
     test_slit = formal_solution_slit()
 
+    # ==========================================================================================================================================
     # Now let's load some radyn atmosphere:
 
     #ds = xr.open_dataset("radyn_out_vars.nc")
@@ -252,9 +249,13 @@ if __name__=='__main__':
     #    vlos = ds.vz[t].values * 1E-2, vturb = np.ones(300)*2E3, ne = ds.ne[t].values*1E6, \
     #    nHTot = ds.dens[t].values / (lw.DefaultAtomicAbundance.avgMass * lw.Amu*1E3) * 1E6)
 
-    # This is from a custom atmosphere
-    #test_slit = formal_solution_slit(atmos1d)
+    # The line above can also be different, for example we can load a model atmosphere from another kind of simulation
+    # And instead of specifying  the electron density and the hydrogen density, we can specify the gass pressure, or the mass density
+    # or something else. After we do that, we run the code below: 
 
+    #test_slit = formal_solution_slit(atmos1d)
+    # ==========================================================================================================================================
+    
     # Or let's load a pre-prepared atmosphere from the MURAM thing
     #muram_atmos = np.load("/home/milic/codes/spherical1d/lwatm.npy")
     #print ("info:: loaded the MURaM atmosphere, with shape: ", muram_atmos.shape)
