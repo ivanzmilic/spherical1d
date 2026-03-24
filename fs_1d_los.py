@@ -32,14 +32,15 @@ def compute_intersections(p0, d):
     t2 = (-b + np.sqrt(delta)) / (2.0 * a)
     return t1, t2
 
-def sphere_trace_semi_inf(ctx, limbdistance, ds = 50):
+def sphere_trace_semi_inf(ctx, limbdistance, limb_position = 0, ds = 50):
 
     # NOTE(im): This traces the sphere in a given mu, where p0 actually changes between the rays 
     # written by following the one from CMO (a lot of things are simply identical)
     # limbdistance is in km, compared to the absolute possible top of the atmosphere
     # So, it's NOT The actual limb distance
-    dy =  1.0 - limbdistance / const.R_sun.value
-    #dy = 1.0 * np.sqrt(1.0 - mu_out**2.0)
+    # Limb distance is defined as positive above the limb and negative below the limb, where limb is, in the context of this function
+    # defined as the upmost layer. We also need to fix that! 
+    dy =  1.0 + (limbdistance - limb_position) / const.R_sun.value
     
 
     # put the origin somewhere far from the atmosphere:
@@ -206,14 +207,15 @@ def formal_solution_slit(input_atmos=None, calculate_disk_center=False,):
     print(limbdistances)
     
     Rs = const.R_sun.value
-    total_z = susi_ctx.atmos.z[0] - susi_ctx.atmos.z[-1] 
+    total_z = susi_ctx.atmos.z[0] - susi_ctx.atmos.z[-1]
+    delta_z_above = total_z - 350E3 # This is the approximate height of the limb assumed to be around 350km 
 
     num_lambda = len(susi_ctx.spect.wavelength)
     I = np.zeros([num_distances, num_lambda])
     paths = np.zeros(num_distances)
     taus = np.zeros([num_distances, num_lambda])
     for m in tqdm(range(0, num_distances)):
-        spec, temp, total_path, total_tau = sphere_trace_semi_inf(susi_ctx, limbdistances[m], 25.0)
+        spec, temp, total_path, total_tau = sphere_trace_semi_inf(susi_ctx, limbdistances[m], limb_position= delta_z_above ,ds=25.0)
         I[m,:] = spec 
         paths[m] = total_path
         taus[m,:] = total_tau
